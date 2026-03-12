@@ -11,7 +11,7 @@ import { extractSchemaFromQuery, getQueryTypes } from "./utils.js";
 
 import * as mysql2 from "mysql2/promise";
 import { log } from "./../utils/index.js";
-import { mcpConfig as config, MYSQL_DISABLE_READ_ONLY_TRANSACTIONS } from "./../config/index.js";
+import { mcpConfig as config, MYSQL_DISABLE_READ_ONLY_TRANSACTIONS, MYSQL_DISABLE_TRANSACTIONS } from "./../config/index.js";
 
 // Force read-only mode in multi-DB mode unless explicitly configured otherwise
 if (isMultiDbMode && process.env.MULTI_DB_WRITE_MODE !== "true") {
@@ -78,8 +78,10 @@ async function executeWriteQuery<T>(sql: string): Promise<T> {
     // Extract schema for permissions (if needed)
     const schema = extractSchemaFromQuery(sql);
 
-    // @INFO: Begin transaction for write operation
-    await connection.beginTransaction();
+    // @INFO: Begin transaction for write operation (unless disabled)
+    if (!MYSQL_DISABLE_TRANSACTIONS) {
+      await connection.beginTransaction();
+    }
 
     try {
       // @INFO: Execute the write query
@@ -89,8 +91,10 @@ async function executeWriteQuery<T>(sql: string): Promise<T> {
       const duration = endTime - startTime;
       const response = Array.isArray(result) ? result[0] : result;
 
-      // @INFO: Commit the transaction
-      await connection.commit();
+      // @INFO: Commit the transaction (unless disabled)
+      if (!MYSQL_DISABLE_TRANSACTIONS) {
+        await connection.commit();
+      }
 
       // @INFO: Format the response based on operation type
       let responseText;
@@ -140,9 +144,11 @@ async function executeWriteQuery<T>(sql: string): Promise<T> {
         isError: false,
       } as T;
     } catch (error: unknown) {
-      // @INFO: Rollback on error
+      // @INFO: Rollback on error (unless disabled)
       log("error", "Error executing write query:", error);
-      await connection.rollback();
+      if (!MYSQL_DISABLE_TRANSACTIONS) {
+        await connection.rollback();
+      }
 
       return {
         content: [
@@ -275,30 +281,31 @@ async function executeReadOnlyQuery<T>(sql: string): Promise<T> {
     connection = await pool.getConnection();
     log("error", "Read-only connection acquired");
 
-    // Set read-only mode (unless disabled via environment variable)
-    if (!MYSQL_DISABLE_READ_ONLY_TRANSACTIONS) {
-      await connection.query("SET SESSION TRANSACTION READ ONLY");
-    } else {
-      log("info", "Read-only transactions disabled via MYSQL_DISABLE_READ_ONLY_TRANSACTIONS=true");
+    if (!MYSQL_DISABLE_TRANSACTIONS) {
+      // Set read-only mode (unless disabled via environment variable)
+      if (!MYSQL_DISABLE_READ_ONLY_TRANSACTIONS) {
+        await connection.query("SET SESSION TRANSACTION READ ONLY");
+      } else {
+        log("info", "Read-only transactions disabled via MYSQL_DISABLE_READ_ONLY_TRANSACTIONS=true");
+      }
+      await connection.beginTransaction();
     }
 
-    // Begin transaction
-    await connection.beginTransaction();
-
     try {
-      // Execute query - in multi-DB mode, we may need to handle USE statements specially
+      // Execute query
       const startTime = performance.now();
       const result = await connection.query(sql);
       const endTime = performance.now();
       const duration = endTime - startTime;
       const rows = Array.isArray(result) ? result[0] : result;
 
-      // Rollback transaction (since it's read-only)
-      await connection.rollback();
-
-      // Reset to read-write mode (only if we set it to read-only)
-      if (!MYSQL_DISABLE_READ_ONLY_TRANSACTIONS) {
-        await connection.query("SET SESSION TRANSACTION READ WRITE");
+      if (!MYSQL_DISABLE_TRANSACTIONS) {
+        // Rollback transaction (since it's read-only)
+        await connection.rollback();
+        // Reset to read-write mode (only if we set it to read-only)
+        if (!MYSQL_DISABLE_READ_ONLY_TRANSACTIONS) {
+          await connection.query("SET SESSION TRANSACTION READ WRITE");
+        }
       }
 
       return {
@@ -317,14 +324,16 @@ async function executeReadOnlyQuery<T>(sql: string): Promise<T> {
     } catch (error) {
       // Rollback transaction on query error
       log("error", "Error executing read-only query:", error);
-      await connection.rollback();
+      if (!MYSQL_DISABLE_TRANSACTIONS) {
+        await connection.rollback();
+      }
       throw error;
     }
   } catch (error) {
     // Ensure we rollback and reset transaction mode on any error
     log("error", "Error in read-only query transaction:", error);
     try {
-      if (connection) {
+      if (connection && !MYSQL_DISABLE_TRANSACTIONS) {
         await connection.rollback();
         // Reset to read-write mode (only if we set it to read-only)
         if (!MYSQL_DISABLE_READ_ONLY_TRANSACTIONS) {

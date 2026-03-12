@@ -75,8 +75,14 @@ export const ALLOW_DELETE_OPERATION =
 export const ALLOW_DDL_OPERATION = process.env.ALLOW_DDL_OPERATION === "true";
 
 // Transaction mode control
-export const MYSQL_DISABLE_READ_ONLY_TRANSACTIONS = 
+export const MYSQL_DISABLE_READ_ONLY_TRANSACTIONS =
   process.env.MYSQL_DISABLE_READ_ONLY_TRANSACTIONS === "true";
+
+// Completely disable all transaction management (BEGIN/COMMIT/ROLLBACK)
+// Relies on MySQL autocommit=1 (default). Useful when using proxies or
+// environments that do not support explicit transactions.
+export const MYSQL_DISABLE_TRANSACTIONS =
+  process.env.MYSQL_DISABLE_TRANSACTIONS === "true";
 
 // Schema-specific permissions
 export const SCHEMA_INSERT_PERMISSIONS: SchemaPermissions =
